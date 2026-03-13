@@ -8,7 +8,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.2.0</version>
+        <version>3.4.0</version>
         <relativePath/>
     </parent>
 
@@ -23,10 +23,23 @@
         <maven.compiler.source>17</maven.compiler.source>
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
-        <okhttp.version>4.12.0</okhttp.version>
         <jline.version>3.25.0</jline.version>
         <picocli.version>4.7.5</picocli.version>
+        <spring-ai.version>1.0.0</spring-ai.version>
+        <okhttp.version>4.12.0</okhttp.version>
     </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.springframework.ai</groupId>
+                <artifactId>spring-ai-bom</artifactId>
+                <version>${spring-ai.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
 
     <dependencies>
         <!-- Spring Boot -->
@@ -54,7 +67,13 @@
             <version>${jline.version}</version>
         </dependency>
 
-        <!-- HTTP Client -->
+        <!-- Spring AI OpenAI (OpenAI 兼容接口，base-url 可指向 Kimi) -->
+        <dependency>
+            <groupId>org.springframework.ai</groupId>
+            <artifactId>spring-ai-starter-model-openai</artifactId>
+        </dependency>
+
+        <!-- HTTP Client (KimiModelClient 仍使用，待阶段 2 可移除) -->
         <dependency>
             <groupId>com.squareup.okhttp3</groupId>
             <artifactId>okhttp</artifactId>

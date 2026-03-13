@@ -68,14 +68,16 @@ com.dokocli
 ├── cli           # CLI 交互层
 ├── core          # 核心领域
 │   ├── session   # 会话管理
-│   └── tool      # 工具框架
+│   └── tool      # 工具注册（基于 Spring AI ToolCallbacks）
 ├── model         # 模型接入层
 │   ├── api       # 统一接口
 │   └── kimi      # Kimi 实现
-└── tool          # 具体工具实现
-    ├── filesystem
-    └── bash
+├── tool          # 具体工具实现（Spring AI @Tool）
+│   └── bash
+└── docs          # 文档（含 Spring AI 优化计划）
 ```
+
+工具层已接入 **Spring AI**（`@Tool` / `ToolCallbacks`），模型层仍为自研 Kimi 客户端。详见 `docs/SPRING_AI_OPTIMIZATION_PLAN.md`。
 
 ## 配置
 

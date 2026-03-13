@@ -1,9 +1,9 @@
 package com.dokocli.tool.bash;
 
-import com.dokocli.core.tool.Tool;
-import com.dokocli.core.tool.ToolParameter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.ai.tool.annotation.Tool;
+import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;
 
 import java.io.BufferedReader;
@@ -12,7 +12,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Bash 命令执行工具 - CLI Agent 的唯一工具
+ * Bash 命令执行工具 - CLI Agent 的唯一工具（Spring AI @Tool）
  */
 @Component
 public class BashTools {
@@ -34,9 +34,9 @@ public class BashTools {
                     """
     )
     public String executeBash(
-            @ToolParameter(description = "要执行的 Bash 命令") String command,
-            @ToolParameter(description = "工作目录（绝对路径，可选）", required = false) String workingDir,
-            @ToolParameter(description = "超时时间（秒，默认60）", required = false) Integer timeoutSeconds
+            @ToolParam(description = "要执行的 Bash 命令") String command,
+            @ToolParam(description = "工作目录（绝对路径，可选）", required = false) String workingDir,
+            @ToolParam(description = "超时时间（秒，默认60）", required = false) Integer timeoutSeconds
     ) throws Exception {
         int timeout = timeoutSeconds != null ? timeoutSeconds : 60;
 
