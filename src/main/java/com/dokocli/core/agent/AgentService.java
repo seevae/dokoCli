@@ -25,9 +25,6 @@ public class AgentService {
         this.toolRegistry = toolRegistry;
     }
 
-    /**
-     * 处理用户一次输入，完成完整的 agent loop（包括工具调用）。
-     */
     public void processUserInput(String input, Session session, Terminal terminal) {
         // 添加用户消息
         session.addMessage(new UserMessage(input));
@@ -53,22 +50,34 @@ public class AgentService {
                         response.reasoningContent()
                 ));
 
-                // 执行工具
+                // 执行工具（同时在终端中展示更详细的执行过程）
                 for (ToolCall tc : response.toolCalls()) {
-                    terminal.writer().println("[执行工具] " + tc.name());
+                    // 显示工具名和参数概览
+                    terminal.writer().println("[执行工具] " + tc.name() + " " + tc.arguments());
                     terminal.flush();
 
                     try {
                         String result = toolRegistry.executeTool(tc.name(), tc.arguments());
 
-                        // 截断过长的结果
+                        // 终端中展示一小段结果预览，方便用户理解工具做了什么
+                        String preview = result;
+                        if (preview.length() > 300) {
+                            preview = preview.substring(0, 300) + "... (输出已截断，仅展示前 300 字符)";
+                        }
+                        terminal.writer().println("[工具结果] " + preview);
+                        terminal.writer().println();
+                        terminal.flush();
+
+                        // 截断过长的结果后再写入对话上下文，避免上下文过大
                         if (result.length() > 8000) {
                             result = result.substring(0, 8000) + "\n... (内容已截断)";
                         }
-
                         session.addMessage(new ToolMessage(tc.id(), result));
                     } catch (Exception e) {
                         String error = "执行失败: " + e.getMessage();
+                        terminal.writer().println("[工具错误] " + error);
+                        terminal.writer().println();
+                        terminal.flush();
                         session.addMessage(new ToolMessage(tc.id(), error));
                     }
                 }
