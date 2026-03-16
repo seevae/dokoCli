@@ -1,5 +1,6 @@
-package com.dokocli.tool.bash;
+package com.dokocli.core.tool.impl;
 
+import com.dokocli.core.tool.AgentTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.annotation.Tool;
@@ -15,7 +16,7 @@ import java.util.concurrent.TimeUnit;
  * Bash 命令执行工具 - CLI Agent 的唯一工具（Spring AI @Tool）
  */
 @Component
-public class BashTools {
+public class BashTools implements AgentTool {
 
     private static final Logger log = LoggerFactory.getLogger(BashTools.class);
 

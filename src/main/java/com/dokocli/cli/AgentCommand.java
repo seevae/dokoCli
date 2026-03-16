@@ -1,9 +1,10 @@
 package com.dokocli.cli;
 
+import com.dokocli.core.agent.AgentService;
 import com.dokocli.core.session.Session;
 import com.dokocli.core.session.SessionManager;
 import com.dokocli.core.tool.ToolRegistry;
-import com.dokocli.model.api.*;
+import com.dokocli.model.api.SystemMessage;
 import org.jline.reader.EndOfFileException;
 import org.jline.reader.LineReader;
 import org.jline.reader.LineReaderBuilder;
@@ -13,21 +14,18 @@ import org.jline.terminal.TerminalBuilder;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
-import java.util.List;
-import java.util.Map;
-
 /**
  * CLI 主命令，处理交互式对话
  */
 @Component
 public class AgentCommand implements CommandLineRunner {
 
-    private final ModelClient modelClient;
+    private final AgentService agentService;
     private final SessionManager sessionManager;
     private final ToolRegistry toolRegistry;
 
-    public AgentCommand(ModelClient modelClient, SessionManager sessionManager, ToolRegistry toolRegistry) {
-        this.modelClient = modelClient;
+    public AgentCommand(AgentService agentService, SessionManager sessionManager, ToolRegistry toolRegistry) {
+        this.agentService = agentService;
         this.sessionManager = sessionManager;
         this.toolRegistry = toolRegistry;
     }
@@ -72,8 +70,8 @@ public class AgentCommand implements CommandLineRunner {
                     continue;
                 }
 
-                // 处理用户输入
-                processUserInput(input, session, terminal);
+                // 处理用户输入（委托给核心 AgentService）
+                agentService.processUserInput(input, session, terminal);
 
             } catch (UserInterruptException e) {
                 terminal.writer().println("\n输入 Ctrl+D 退出");
@@ -83,78 +81,6 @@ public class AgentCommand implements CommandLineRunner {
         }
 
         terminal.writer().println("\n再见！");
-    }
-
-    private void processUserInput(String input, Session session, Terminal terminal) {
-        // 添加用户消息
-        session.addMessage(new UserMessage(input));
-
-        // 调用模型
-        ChatRequest request = new ChatRequest(
-                session.getMessages(),
-                toolRegistry.getAllToolDefinitions()
-        );
-
-        terminal.writer().print("\n");
-        terminal.flush();
-
-        try {
-            ChatResponse response = modelClient.chat(request);
-
-            // 处理工具调用
-            while (response.hasToolCalls()) {
-                // 添加助手消息（包含工具调用和推理内容，reasoning_content 在下一轮请求中必须回传）
-                session.addMessage(new AssistantMessage(
-                        response.content(),
-                        response.toolCalls(),
-                        response.reasoningContent()
-                ));
-
-                // 执行工具
-                for (ToolCall tc : response.toolCalls()) {
-                    terminal.writer().println("[执行工具] " + tc.name());
-                    terminal.flush();
-
-                    try {
-                        String result = toolRegistry.executeTool(tc.name(), tc.arguments());
-
-                        // 截断过长的结果
-                        if (result.length() > 8000) {
-                            result = result.substring(0, 8000) + "\n... (内容已截断)";
-                        }
-
-                        session.addMessage(new ToolMessage(tc.id(), result));
-                    } catch (Exception e) {
-                        String error = "执行失败: " + e.getMessage();
-                        session.addMessage(new ToolMessage(tc.id(), error));
-                    }
-                }
-
-                // 再次调用模型获取回复
-                request = new ChatRequest(
-                        session.getMessages(),
-                        toolRegistry.getAllToolDefinitions()
-                );
-                response = modelClient.chat(request);
-            }
-
-            // 输出最终回复
-            String content = response.content();
-            if (content != null && !content.isEmpty()) {
-                terminal.writer().println(content);
-                terminal.writer().println();
-                terminal.flush();
-
-                session.addMessage(new AssistantMessage(content, null, null));
-            }
-
-            // 简单的上下文管理
-            session.trimMessages(20);
-
-        } catch (Exception e) {
-            terminal.writer().println("错误: " + e.getMessage());
-            terminal.flush();
-        }
     }
 
     private boolean handleCommand(String cmd, Session session, Terminal terminal) {
@@ -200,7 +126,7 @@ public class AgentCommand implements CommandLineRunner {
         terminal.writer().println("║          Doko CLI                 ║");
         terminal.writer().println("║     AI Powered Code Assistant     ║");
         terminal.writer().println("╚═══════════════════════════════════╝");
-        terminal.writer().println("Model: " + modelClient.getProvider());
+        terminal.writer().println("Model: " + toolRegistry.getClass().getSimpleName());
         terminal.writer().println();
         terminal.flush();
     }
@@ -221,22 +147,28 @@ public class AgentCommand implements CommandLineRunner {
         return """
             你是一个名为 Doko 的 AI 编程助手。你可以帮助用户完成各种编程任务。
 
-            你只有一个工具可用：
+            你可以使用以下工具：
             - execute_bash: 执行任意 Bash 命令
+            - read_file: 读取工作目录中的文件内容
+            - write_file: 向工作目录中的文件写入内容（会覆盖原内容）
+            - edit_file: 在文件中查找并替换第一次出现的指定文本
 
-            通过 Bash 命令你可以完成所有操作：
-            - 读文件: cat /path/to/file
-            - 写文件: echo 'content' > /path/to/file
-            - 编辑文件: sed -i 's/old/new/' /path/to/file
-            - 浏览目录: ls -la /path
-            - 创建目录: mkdir -p /path/to/dir
-            - 文件搜索: grep -r 'keyword' /path
-            - Git 操作: git status, git diff, git log, git add, git commit
-            - 运行代码: python, node, mvn, gradle 等
+            推荐优先使用 read_file / write_file / edit_file 来进行代码和文档的读写与精确编辑，
+            在需要复杂 shell 操作时再使用 execute_bash。
+
+            通过这些工具你可以完成所有操作，例如：
+            - 读文件: read_file（推荐）或 `cat /path/to/file`
+            - 写文件: write_file（推荐）或 `echo 'content' > /path/to/file`
+            - 编辑文件: edit_file（推荐）或 `sed -i 's/old/new/' /path/to/file`
+            - 浏览目录: `ls -la /path`
+            - 创建目录: `mkdir -p /path/to/dir`
+            - 文件搜索: `grep -r 'keyword' /path`
+            - Git 操作: `git status`, `git diff`, `git log`, `git add`, `git commit`
+            - 运行代码: `python`, `node`, `mvn`, `gradle` 等
 
             注意：
-            1. 使用绝对路径操作文件
-            2. 敏感操作（rm -rf）前请确认
+            1. 使用工作目录下的相对路径或绝对路径操作文件
+            2. 敏感操作（如 rm -rf）前请确认
             3. 避免交互式命令（如 vim）
             """;
     }

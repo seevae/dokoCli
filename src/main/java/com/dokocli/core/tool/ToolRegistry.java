@@ -1,7 +1,6 @@
 package com.dokocli.core.tool;
 
 import com.dokocli.model.api.ToolDefinition;
-import com.dokocli.tool.bash.BashTools;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -25,8 +24,8 @@ public class ToolRegistry {
     private final ToolCallback[] callbacks;
     private final ObjectMapper objectMapper;
 
-    public ToolRegistry(BashTools bashTools, ObjectMapper objectMapper) {
-        this.callbacks = ToolCallbacks.from(bashTools);
+    public ToolRegistry(List<AgentTool> tools, ObjectMapper objectMapper) {
+        this.callbacks = ToolCallbacks.from(tools.toArray());
         this.objectMapper = objectMapper;
         log.info("Registered {} tools (Spring AI): {}", callbacks.length,
                 List.of(callbacks).stream().map(c -> c.getToolDefinition().name()).toList());
