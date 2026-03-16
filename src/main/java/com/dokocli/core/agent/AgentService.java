@@ -43,6 +43,17 @@ public class AgentService {
 
             // 处理工具调用
             while (response.hasToolCalls()) {
+                // 打印模型思考过程（reasoning_content），帮助用户理解为什么要调用这些工具
+                String reasoning = response.reasoningContent();
+                if (reasoning != null && !reasoning.isEmpty()) {
+                    String preview = reasoning.length() > 1000
+                            ? reasoning.substring(0, 1000) + "... (思考内容已截断，仅展示前 1000 字符)"
+                            : reasoning;
+                    terminal.writer().println("[思考] " + preview);
+                    terminal.writer().println();
+                    terminal.flush();
+                }
+
                 // 添加助手消息（包含工具调用和推理内容，reasoning_content 在下一轮请求中必须回传）
                 session.addMessage(new AssistantMessage(
                         response.content(),
@@ -90,14 +101,32 @@ public class AgentService {
                 response = modelClient.chat(request);
             }
 
-            // 输出最终回复
-            String content = response.content();
-            if (content != null && !content.isEmpty()) {
-                terminal.writer().println(content);
-                terminal.writer().println();
-                terminal.flush();
+            // 最终回复阶段：使用流式输出，让内容逐步显示
+            if (response.finishReason() != null) {
+                // 使用当前会话重新发起一次仅用于流式输出的请求
+                ChatRequest finalRequest = new ChatRequest(
+                        session.getMessages(),
+                        toolRegistry.getAllToolDefinitions()
+                );
 
-                session.addMessage(new AssistantMessage(content, null, null));
+                StringBuilder fullContent = new StringBuilder();
+                modelClient.stream(finalRequest).forEach(chunk -> {
+                    String delta = chunk.content();
+                    if (delta != null && !delta.isEmpty()) {
+                        fullContent.append(delta);
+                        terminal.writer().print(delta);
+                        terminal.writer().flush();
+                    }
+                });
+
+                String finalContent = fullContent.toString();
+                if (!finalContent.isEmpty()) {
+                    terminal.writer().println();
+                    terminal.writer().println();
+                    terminal.flush();
+
+                    session.addMessage(new AssistantMessage(finalContent, null, null));
+                }
             }
 
             // 简单的上下文管理
