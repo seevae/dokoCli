@@ -1,5 +1,6 @@
 package com.dokocli.core.session;
 
+import com.dokocli.core.plan.PlanState;
 import com.dokocli.model.api.Message;
 
 import java.time.Instant;
@@ -8,13 +9,14 @@ import java.util.List;
 import java.util.UUID;
 
 /**
- * 对话会话
+ * 对话会话（含消息与规划状态）
  */
 public class Session {
     private final String id;
     private final Instant createdAt;
     private Instant lastActive;
     private final List<Message> messages;
+    private PlanState planState;
 
     public Session() {
         this.id = UUID.randomUUID().toString().substring(0, 8);
@@ -38,7 +40,20 @@ public class Session {
 
     public void clearMessages() {
         messages.clear();
+        if (planState != null) {
+            planState.clear();
+        }
         lastActive = Instant.now();
+    }
+
+    /**
+     * 获取当前会话的规划状态（任务列表），首次访问时创建。
+     */
+    public PlanState getPlanState() {
+        if (planState == null) {
+            planState = new PlanState();
+        }
+        return planState;
     }
 
     public Instant getLastActive() {

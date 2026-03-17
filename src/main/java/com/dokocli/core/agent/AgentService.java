@@ -1,21 +1,26 @@
 package com.dokocli.core.agent;
 
 import com.dokocli.core.session.Session;
+import com.dokocli.core.session.SessionContextHolder;
 import com.dokocli.core.tool.ToolRegistry;
 import com.dokocli.model.api.*;
 import org.jline.terminal.Terminal;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
+
 /**
  * 核心 Agent 编排逻辑（agent loop）。
- * 负责：
- * - 维护会话消息
- * - 调用大模型
- * - 处理工具调用并回填结果
+ * 负责：维护会话消息、调用大模型、处理工具调用并回填结果。
  * CLI、HTTP 等上层只需要调用此服务。
  */
 @Service
 public class AgentService {
+
+    private static final int TOOL_RESULT_MAX_LENGTH = 8000;
+    private static final int TERMINAL_PREVIEW_LENGTH = 300;
+    private static final int REASONING_PREVIEW_LENGTH = 1000;
+    private static final int NAG_REMINDER_THRESHOLD = 3;
 
     private final ModelClient modelClient;
     private final ToolRegistry toolRegistry;
@@ -26,116 +31,145 @@ public class AgentService {
     }
 
     public void processUserInput(String input, Session session, Terminal terminal) {
-        // 添加用户消息
-        session.addMessage(new UserMessage(input));
-
-        // 调用模型
-        ChatRequest request = new ChatRequest(
-                session.getMessages(),
-                toolRegistry.getAllToolDefinitions()
-        );
-
-        terminal.writer().print("\n");
-        terminal.flush();
-
+        SessionContextHolder.setSession(session);
         try {
-            ChatResponse response = modelClient.chat(request);
+            session.addMessage(new UserMessage(input));
+            terminal.writer().print("\n");
+            terminal.flush();
 
-            // 处理工具调用
+            ChatResponse response = callModel(session);
+            int roundsSinceTodo = 0;
+
             while (response.hasToolCalls()) {
-                // 打印模型思考过程（reasoning_content），帮助用户理解为什么要调用这些工具
-                String reasoning = response.reasoningContent();
-                if (reasoning != null && !reasoning.isEmpty()) {
-                    String preview = reasoning.length() > 1000
-                            ? reasoning.substring(0, 1000) + "... (思考内容已截断，仅展示前 1000 字符)"
-                            : reasoning;
-                    terminal.writer().println("[思考] " + preview);
-                    terminal.writer().println();
-                    terminal.flush();
-                }
-
-                // 添加助手消息（包含工具调用和推理内容，reasoning_content 在下一轮请求中必须回传）
+                printReasoning(response, terminal);
                 session.addMessage(new AssistantMessage(
                         response.content(),
                         response.toolCalls(),
                         response.reasoningContent()
                 ));
 
-                // 执行工具（同时在终端中展示更详细的执行过程）
-                for (ToolCall tc : response.toolCalls()) {
-                    // 显示工具名和参数概览
-                    terminal.writer().println("[执行工具] " + tc.name() + " " + tc.arguments());
-                    terminal.flush();
+                boolean usedTodo = executeToolCalls(response.toolCalls(), session, terminal);
+                roundsSinceTodo = usedTodo ? 0 : roundsSinceTodo + 1;
 
-                    try {
-                        String result = toolRegistry.executeTool(tc.name(), tc.arguments());
-
-                        // 终端中展示一小段结果预览，方便用户理解工具做了什么
-                        String preview = result;
-                        if (preview.length() > 300) {
-                            preview = preview.substring(0, 300) + "... (输出已截断，仅展示前 300 字符)";
-                        }
-                        terminal.writer().println("[工具结果] " + preview);
-                        terminal.writer().println();
-                        terminal.flush();
-
-                        // 截断过长的结果后再写入对话上下文，避免上下文过大
-                        if (result.length() > 8000) {
-                            result = result.substring(0, 8000) + "\n... (内容已截断)";
-                        }
-                        session.addMessage(new ToolMessage(tc.id(), result));
-                    } catch (Exception e) {
-                        String error = "执行失败: " + e.getMessage();
-                        terminal.writer().println("[工具错误] " + error);
-                        terminal.writer().println();
-                        terminal.flush();
-                        session.addMessage(new ToolMessage(tc.id(), error));
-                    }
+                if (roundsSinceTodo >= NAG_REMINDER_THRESHOLD) {
+                    session.addMessage(new UserMessage(
+                            "<reminder>Update your todos to reflect current progress.</reminder>"));
                 }
 
-                // 再次调用模型获取回复
-                request = new ChatRequest(
-                        session.getMessages(),
-                        toolRegistry.getAllToolDefinitions()
-                );
-                response = modelClient.chat(request);
+                response = callModel(session);
             }
 
-            // 最终回复阶段：使用流式输出，让内容逐步显示
-            if (response.finishReason() != null) {
-                // 使用当前会话重新发起一次仅用于流式输出的请求
-                ChatRequest finalRequest = new ChatRequest(
-                        session.getMessages(),
-                        toolRegistry.getAllToolDefinitions()
-                );
-
-                StringBuilder fullContent = new StringBuilder();
-                modelClient.stream(finalRequest).forEach(chunk -> {
-                    String delta = chunk.content();
-                    if (delta != null && !delta.isEmpty()) {
-                        fullContent.append(delta);
-                        terminal.writer().print(delta);
-                        terminal.writer().flush();
-                    }
-                });
-
-                String finalContent = fullContent.toString();
-                if (!finalContent.isEmpty()) {
-                    terminal.writer().println();
-                    terminal.writer().println();
-                    terminal.flush();
-
-                    session.addMessage(new AssistantMessage(finalContent, null, null));
-                }
-            }
-
-            // 简单的上下文管理
+            streamFinalResponse(session, terminal);
             session.trimMessages(20);
 
         } catch (Exception e) {
             terminal.writer().println("错误: " + e.getMessage());
             terminal.flush();
+        } finally {
+            SessionContextHolder.clear();
+        }
+    }
+
+    private ChatResponse callModel(Session session) {
+        ChatRequest request = new ChatRequest(
+                session.getMessages(),
+                toolRegistry.getAllToolDefinitions()
+        );
+        return modelClient.chat(request);
+    }
+
+    /**
+     * 执行本轮所有工具调用，写入 ToolMessage，返回本轮是否调用了 todo 工具。
+     */
+    private boolean executeToolCalls(List<ToolCall> toolCalls, Session session, Terminal terminal) {
+        boolean usedTodo = false;
+        for (ToolCall tc : toolCalls) {
+            if ("todo".equals(tc.name())) {
+                usedTodo = true;
+            }
+            terminal.writer().println("[执行工具] " + tc.name() + " " + tc.arguments());
+            terminal.flush();
+
+            try {
+                String result = toolRegistry.executeTool(tc.name(), tc.arguments());
+                printToolPreview(terminal, result);
+                if (result.length() > TOOL_RESULT_MAX_LENGTH) {
+                    result = result.substring(0, TOOL_RESULT_MAX_LENGTH) + "\n... (内容已截断)";
+                }
+                session.addMessage(new ToolMessage(tc.id(), result));
+            } catch (Exception e) {
+                String error = "执行失败: " + e.getMessage();
+                terminal.writer().println("[工具错误] " + error);
+                terminal.writer().println();
+                terminal.flush();
+                session.addMessage(new ToolMessage(tc.id(), error));
+            }
+        }
+        return usedTodo;
+    }
+
+    private void printReasoning(ChatResponse response, Terminal terminal) {
+        String reasoning = response.reasoningContent();
+        if (reasoning == null || reasoning.isEmpty()) {
+            return;
+        }
+        String preview = reasoning.length() > REASONING_PREVIEW_LENGTH
+                ? reasoning.substring(0, REASONING_PREVIEW_LENGTH) + "... (思考内容已截断)"
+                : reasoning;
+        terminal.writer().println("[思考] " + preview);
+        terminal.writer().println();
+        terminal.flush();
+    }
+
+    private void printToolPreview(Terminal terminal, String result) {
+        String readable = unescapeForDisplay(result);
+        String preview = readable.length() > TERMINAL_PREVIEW_LENGTH
+                ? readable.substring(0, TERMINAL_PREVIEW_LENGTH) + "... (输出已截断)"
+                : readable;
+        terminal.writer().println("[工具结果]");
+        terminal.writer().println(preview);
+        terminal.writer().println();
+        terminal.flush();
+    }
+
+    /**
+     * 将 Spring AI ToolCallback 返回的 JSON 编码字符串还原为人类可读格式：
+     * 去掉外层引号，将 \n \t \" \\\\ 等转义还原为真实字符。
+     */
+    private static String unescapeForDisplay(String raw) {
+        if (raw == null) {
+            return "";
+        }
+        String s = raw;
+        if (s.length() >= 2 && s.startsWith("\"") && s.endsWith("\"")) {
+            s = s.substring(1, s.length() - 1);
+        }
+        return s.replace("\\n", "\n")
+                .replace("\\t", "\t")
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\");
+    }
+
+    private void streamFinalResponse(Session session, Terminal terminal) {
+        ChatRequest finalRequest = new ChatRequest(
+                session.getMessages(),
+                toolRegistry.getAllToolDefinitions()
+        );
+        StringBuilder fullContent = new StringBuilder();
+        modelClient.stream(finalRequest).forEach(chunk -> {
+            String delta = chunk.content();
+            if (delta != null && !delta.isEmpty()) {
+                fullContent.append(delta);
+                terminal.writer().print(delta);
+                terminal.writer().flush();
+            }
+        });
+        String finalContent = fullContent.toString();
+        if (!finalContent.isEmpty()) {
+            terminal.writer().println();
+            terminal.writer().println();
+            terminal.flush();
+            session.addMessage(new AssistantMessage(finalContent, null, null));
         }
     }
 }
-

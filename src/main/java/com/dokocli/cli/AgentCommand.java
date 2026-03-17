@@ -111,6 +111,11 @@ public class AgentCommand implements CommandLineRunner {
                 terminal.flush();
                 yield false;
             }
+            case "/todos" -> {
+                terminal.writer().println(session.getPlanState().render());
+                terminal.flush();
+                yield false;
+            }
             default -> {
                 terminal.writer().println("未知命令: " + cmd);
                 terminal.writer().println("输入 /help 查看可用命令");
@@ -138,6 +143,7 @@ public class AgentCommand implements CommandLineRunner {
         terminal.writer().println("  /clear   - 清空对话历史");
         terminal.writer().println("  /session - 显示会话信息");
         terminal.writer().println("  /tools   - 显示可用工具");
+        terminal.writer().println("  /todos   - 显示当前任务规划");
         terminal.writer().println("  /exit    - 退出程序");
         terminal.writer().println();
         terminal.flush();
@@ -145,26 +151,25 @@ public class AgentCommand implements CommandLineRunner {
 
     private String getSystemPrompt() {
         return """
-            你是一个名为 Doko 的 AI 编程助手。你可以帮助用户完成各种编程任务。
+            你是一个名为 Doko 的 AI 编程助手。
 
-            你可以使用以下工具：
+            ## 重要：任务规划
+            当任务涉及多个步骤时（例如需要读多个文件、修改多处代码、先分析再实施），
+            你必须先调用 todo 工具列出计划，再开始执行。具体规则：
+            1. 先调用 todo 列出所有步骤，每条 status 设为 pending
+            2. 开始执行某一步前，调用 todo 将该条更新为 in_progress
+            3. 完成该步后，调用 todo 将该条更新为 completed
+            4. 只有以下情况可以跳过 todo：单条命令就能完成的简单任务（如"查看某个文件"、"运行某个命令"）
+
+            ## 可用工具
+            - todo: 更新任务规划列表，追踪多步骤任务进度
             - execute_bash: 执行任意 Bash 命令
             - read_file: 读取工作目录中的文件内容
             - write_file: 向工作目录中的文件写入内容（会覆盖原内容）
             - edit_file: 在文件中查找并替换第一次出现的指定文本
 
-            推荐优先使用 read_file / write_file / edit_file 来进行代码和文档的读写与精确编辑，
+            推荐优先使用 read_file / write_file / edit_file 进行文件的读写与精确编辑，
             在需要复杂 shell 操作时再使用 execute_bash。
-
-            通过这些工具你可以完成所有操作，例如：
-            - 读文件: read_file（推荐）或 `cat /path/to/file`
-            - 写文件: write_file（推荐）或 `echo 'content' > /path/to/file`
-            - 编辑文件: edit_file（推荐）或 `sed -i 's/old/new/' /path/to/file`
-            - 浏览目录: `ls -la /path`
-            - 创建目录: `mkdir -p /path/to/dir`
-            - 文件搜索: `grep -r 'keyword' /path`
-            - Git 操作: `git status`, `git diff`, `git log`, `git add`, `git commit`
-            - 运行代码: `python`, `node`, `mvn`, `gradle` 等
 
             注意：
             1. 使用工作目录下的相对路径或绝对路径操作文件
