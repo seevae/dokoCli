@@ -216,11 +216,17 @@ public class KimiModelClient implements ModelClient {
                     public boolean tryAdvance(java.util.function.Consumer<? super ChatChunk> action) {
                         try {
                             String line = body.source().readUtf8Line();
-                            if (line == null) return false;
+                            if (line == null) {
+                                response.close();
+                                return false;
+                            }
 
                             if (line.startsWith("data: ")) {
                                 String data = line.substring(6);
-                                if ("[DONE]".equals(data)) return false;
+                                if ("[DONE]".equals(data)) {
+                                    response.close();
+                                    return false;
+                                }
 
                                 JsonNode node = objectMapper.readTree(data);
                                 JsonNode delta = node.path("choices").get(0).path("delta");
@@ -232,9 +238,10 @@ public class KimiModelClient implements ModelClient {
                             }
                             return true;
                         } catch (IOException e) {
+                            response.close();
                             return false;
                         }
                     }
-                }, false);
+                }, false).onClose(response::close);
     }
 }

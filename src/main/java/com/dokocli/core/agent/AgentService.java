@@ -11,6 +11,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 /**
  * 核心 Agent 编排逻辑（对应 Python 的 agent_loop）。
@@ -27,7 +28,6 @@ public class AgentService {
     private static final Logger log = LoggerFactory.getLogger(AgentService.class);
 
     /**
-     * task 工具定义（对应 Python PARENT_TOOLS 里的 task schema）。
      * task 不是普通工具，而是编排动作，由 AgentService 拦截处理。
      */
     private static final ToolDefinition TASK_TOOL_DEFINITION = new ToolDefinition(
@@ -149,14 +149,16 @@ public class AgentService {
                 ChatRequest finalRequest = new ChatRequest(session.getMessages(), parentTools);
 
                 StringBuilder fullContent = new StringBuilder();
-                modelClient.stream(finalRequest).forEach(chunk -> {
-                    String delta = chunk.content();
-                    if (delta != null && !delta.isEmpty()) {
-                        fullContent.append(delta);
-                        terminal.writer().print(delta);
-                        terminal.writer().flush();
-                    }
-                });
+                try (Stream<ChatChunk> chunks = modelClient.stream(finalRequest)) {
+                    chunks.forEach(chunk -> {
+                        String delta = chunk.content();
+                        if (delta != null && !delta.isEmpty()) {
+                            fullContent.append(delta);
+                            terminal.writer().print(delta);
+                            terminal.writer().flush();
+                        }
+                    });
+                }
 
                 String finalContent = fullContent.toString();
                 if (!finalContent.isEmpty()) {

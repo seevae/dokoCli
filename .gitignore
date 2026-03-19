@@ -31,3 +31,4 @@ out/
 application-local.yml
 *.db
 target/
+.doko/
