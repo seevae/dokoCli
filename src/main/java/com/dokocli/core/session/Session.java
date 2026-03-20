@@ -31,8 +31,27 @@ public class Session {
         return new ArrayList<>(messages);
     }
 
+    public Message getMessage(int index) {
+        return messages.get(index);
+    }
+
+    public int messageCount() {
+        return messages.size();
+    }
+
     public void addMessage(Message message) {
         messages.add(message);
+        lastActive = Instant.now();
+    }
+
+    public void replaceMessage(int index, Message message) {
+        messages.set(index, message);
+        lastActive = Instant.now();
+    }
+
+    public void replaceAllMessages(List<Message> newMessages) {
+        messages.clear();
+        messages.addAll(newMessages);
         lastActive = Instant.now();
     }
 
@@ -50,7 +69,6 @@ public class Session {
      */
     public void trimMessages(int maxMessages) {
         if (messages.size() > maxMessages) {
-            // 保留系统消息（如果有）和最近的消息
             List<Message> toKeep = new ArrayList<>();
             int start = Math.max(0, messages.size() - maxMessages);
             for (int i = start; i < messages.size(); i++) {

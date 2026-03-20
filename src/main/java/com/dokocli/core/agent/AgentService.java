@@ -1,5 +1,6 @@
 package com.dokocli.core.agent;
 
+import com.dokocli.core.compact.ContextCompactor;
 import com.dokocli.core.session.Session;
 import com.dokocli.core.tool.ToolRegistry;
 import com.dokocli.model.api.*;
@@ -17,19 +18,15 @@ import java.util.stream.Stream;
  * 核心 Agent 编排逻辑（对应 Python 的 agent_loop）。
  * 负责：
  * - 维护会话消息
- * - 调用大模型
+ * - 调用大模型（每轮调用前执行上下文压缩管道）
  * - 处理工具调用并回填结果
- * - 拦截 task 工具调用，委派给 SubAgentService
- * CLI、HTTP 等上层只需要调用此服务。
+ * - 拦截 task 虚拟工具调用，检测 compact 工具调用并触发压缩
  */
 @Service
 public class AgentService {
 
     private static final Logger log = LoggerFactory.getLogger(AgentService.class);
 
-    /**
-     * task 不是普通工具，而是编排动作，由 AgentService 拦截处理。
-     */
     private static final ToolDefinition TASK_TOOL_DEFINITION = new ToolDefinition(
             "task",
             """
@@ -58,11 +55,14 @@ public class AgentService {
     private final ModelClient modelClient;
     private final ToolRegistry toolRegistry;
     private final SubAgentService subAgentService;
+    private final ContextCompactor contextCompactor;
 
-    public AgentService(ModelClient modelClient, ToolRegistry toolRegistry, SubAgentService subAgentService) {
+    public AgentService(ModelClient modelClient, ToolRegistry toolRegistry,
+                        SubAgentService subAgentService, ContextCompactor contextCompactor) {
         this.modelClient = modelClient;
         this.toolRegistry = toolRegistry;
         this.subAgentService = subAgentService;
+        this.contextCompactor = contextCompactor;
     }
 
     private List<ToolDefinition> getParentTools() {
@@ -75,24 +75,17 @@ public class AgentService {
         session.addMessage(new UserMessage(input));
 
         List<ToolDefinition> parentTools = getParentTools();
-        ChatRequest request = new ChatRequest(session.getMessages(), parentTools);
 
         terminal.writer().print("\n");
         terminal.flush();
 
         try {
-            ChatResponse response = modelClient.chat(request);
+            compactBeforeCall(session, terminal, false);
+            ChatResponse response = modelClient.chat(
+                    new ChatRequest(session.getMessages(), parentTools));
 
             while (response.hasToolCalls()) {
-                String reasoning = response.reasoningContent();
-                if (reasoning != null && !reasoning.isEmpty()) {
-                    String preview = reasoning.length() > 1000
-                            ? reasoning.substring(0, 1000) + "... (思考内容已截断，仅展示前 1000 字符)"
-                            : reasoning;
-                    terminal.writer().println("[思考] " + preview);
-                    terminal.writer().println();
-                    terminal.flush();
-                }
+                printReasoning(response, terminal);
 
                 session.addMessage(new AssistantMessage(
                         response.content(),
@@ -100,6 +93,7 @@ public class AgentService {
                         response.reasoningContent()
                 ));
 
+                boolean manualCompact = false;
                 for (ToolCall tc : response.toolCalls()) {
                     terminal.writer().println("[执行工具] " + tc.name() + " " + tc.arguments());
                     terminal.flush();
@@ -118,15 +112,12 @@ public class AgentService {
                             result = subAgentService.runSubAgent(taskPrompt, desc, childTools, toolRegistry);
                         } else {
                             result = toolRegistry.executeTool(tc.name(), tc.arguments());
+                            if ("compact".equals(tc.name())) {
+                                manualCompact = true;
+                            }
                         }
 
-                        String preview = result;
-                        if (preview.length() > 300) {
-                            preview = preview.substring(0, 300) + "... (输出已截断，仅展示前 300 字符)";
-                        }
-                        terminal.writer().println("[工具结果] " + preview);
-                        terminal.writer().println();
-                        terminal.flush();
+                        printToolResult(result, terminal);
 
                         if (result.length() > 8000) {
                             result = result.substring(0, 8000) + "\n... (内容已截断)";
@@ -141,8 +132,9 @@ public class AgentService {
                     }
                 }
 
-                request = new ChatRequest(session.getMessages(), parentTools);
-                response = modelClient.chat(request);
+                compactBeforeCall(session, terminal, manualCompact);
+                response = modelClient.chat(
+                        new ChatRequest(session.getMessages(), parentTools));
             }
 
             if (response.finishReason() != null) {
@@ -170,11 +162,44 @@ public class AgentService {
                 }
             }
 
-            session.trimMessages(20);
-
         } catch (Exception e) {
             terminal.writer().println("错误: " + e.getMessage());
             terminal.flush();
         }
+    }
+
+    /**
+     * 每次 LLM 调用前执行压缩管道：Layer 1 (micro) + Layer 2/3 (auto/manual)
+     */
+    private void compactBeforeCall(Session session, Terminal terminal, boolean manualCompact) {
+        contextCompactor.microCompact(session);
+
+        if (manualCompact || contextCompactor.shouldAutoCompact(session)) {
+            String reason = manualCompact ? "manual compact" : "auto_compact";
+            terminal.writer().println("[" + reason + " triggered]");
+            terminal.flush();
+            contextCompactor.autoCompact(session);
+        }
+    }
+
+    private void printReasoning(ChatResponse response, Terminal terminal) {
+        String reasoning = response.reasoningContent();
+        if (reasoning != null && !reasoning.isEmpty()) {
+            String preview = reasoning.length() > 1000
+                    ? reasoning.substring(0, 1000) + "... (思考内容已截断，仅展示前 1000 字符)"
+                    : reasoning;
+            terminal.writer().println("[思考] " + preview);
+            terminal.writer().println();
+            terminal.flush();
+        }
+    }
+
+    private void printToolResult(String result, Terminal terminal) {
+        String preview = result.length() > 300
+                ? result.substring(0, 300) + "... (输出已截断，仅展示前 300 字符)"
+                : result;
+        terminal.writer().println("[工具结果] " + preview);
+        terminal.writer().println();
+        terminal.flush();
     }
 }

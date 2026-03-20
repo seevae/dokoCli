@@ -166,6 +166,7 @@ public class AgentCommand implements CommandLineRunner {
                 + "- edit_file: 精确替换文件中第一次出现的指定文本\n"
                 + "- task: 派发子任务给子代理（子代理不继承当前对话历史，仅返回总结）\n"
                 + "- load_skill: 按名称加载专项知识/指令（遇到不熟悉的领域时优先使用）\n"
+                + "- compact: 主动触发对话压缩（当你觉得上下文过长时调用，以摘要形式保留关键信息）\n"
                 + "\n"
                 + "工具使用原则：\n"
                 + "- 优先用 read_file / edit_file / write_file 做可控、可回溯的改动；需要批量/复杂操作再用 execute_bash。\n"
