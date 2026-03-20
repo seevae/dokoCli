@@ -1,5 +1,6 @@
 package com.dokocli.core.agent;
 
+import com.dokocli.core.context.ContextCompactionService;
 import com.dokocli.core.session.Session;
 import com.dokocli.core.tool.ToolRegistry;
 import com.dokocli.model.api.*;
@@ -42,9 +43,11 @@ public class SubAgentService {
     private static final int MAX_TOOL_RESULT_LENGTH = 8000;
 
     private final ModelClient modelClient;
+    private final ContextCompactionService contextCompaction;
 
-    public SubAgentService(ModelClient modelClient) {
+    public SubAgentService(ModelClient modelClient, ContextCompactionService contextCompaction) {
         this.modelClient = modelClient;
+        this.contextCompaction = contextCompaction;
     }
 
     /**
@@ -67,6 +70,7 @@ public class SubAgentService {
         subSession.addMessage(new SystemMessage(SUBAGENT_SYSTEM_PROMPT));
         subSession.addMessage(new UserMessage(effectivePrompt));
 
+        contextCompaction.applyMicroCompactOnly(subSession);
         ChatRequest request = new ChatRequest(subSession.getMessages(), childTools);
         ChatResponse response = modelClient.chat(request);
 
@@ -92,6 +96,7 @@ public class SubAgentService {
             }
 
             subSession.trimMessages(40);
+            contextCompaction.applyMicroCompactOnly(subSession);
             request = new ChatRequest(subSession.getMessages(), childTools);
             response = modelClient.chat(request);
         }

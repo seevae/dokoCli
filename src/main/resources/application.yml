@@ -23,6 +23,12 @@ kimi:
   api-key: sk-6s2yFxmlBbZfRavIfG03iaIj7DkpOjWd2LN13JPFOZoqQXQW
   model: kimi-k2.5
 
+# 上下文压缩：转录目录为 <工作区>/.transcripts/，工作区默认为进程当前目录，可通过 dokocli.workspace 覆盖
+dokocli:
+  context:
+    # 估计 token 超过该阈值时自动触发全文摘要压缩（与需求文档 Python 版 THRESHOLD 对齐）
+    token-threshold: 50000
+
 # 日志配置
 logging:
   level:

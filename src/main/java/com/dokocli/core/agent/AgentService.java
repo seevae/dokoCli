@@ -1,5 +1,6 @@
 package com.dokocli.core.agent;
 
+import com.dokocli.core.context.ContextCompactionService;
 import com.dokocli.core.session.Session;
 import com.dokocli.core.tool.ToolRegistry;
 import com.dokocli.model.api.*;
@@ -30,6 +31,25 @@ public class AgentService {
     /**
      * task 不是普通工具，而是编排动作，由 AgentService 拦截处理。
      */
+    private static final ToolDefinition COMPACT_TOOL_DEFINITION = new ToolDefinition(
+            "compact",
+            """
+            主动触发对话压缩：将当前完整对话保存到 .transcripts/ 并由模型生成摘要，用摘要替换历史（保留 system）。
+            在长任务、上下文接近上限或需要“有策略地遗忘”旧工具输出时使用。
+            可选 focus 说明希望摘要重点保留的内容。
+            """,
+            Map.of(
+                    "type", "object",
+                    "properties", Map.of(
+                            "focus", Map.of(
+                                    "type", "string",
+                                    "description", "希望摘要重点保留的上下文或决策（可选）"
+                            )
+                    ),
+                    "required", List.of()
+            )
+    );
+
     private static final ToolDefinition TASK_TOOL_DEFINITION = new ToolDefinition(
             "task",
             """
@@ -58,16 +78,23 @@ public class AgentService {
     private final ModelClient modelClient;
     private final ToolRegistry toolRegistry;
     private final SubAgentService subAgentService;
+    private final ContextCompactionService contextCompaction;
 
-    public AgentService(ModelClient modelClient, ToolRegistry toolRegistry, SubAgentService subAgentService) {
+    public AgentService(
+            ModelClient modelClient,
+            ToolRegistry toolRegistry,
+            SubAgentService subAgentService,
+            ContextCompactionService contextCompaction) {
         this.modelClient = modelClient;
         this.toolRegistry = toolRegistry;
         this.subAgentService = subAgentService;
+        this.contextCompaction = contextCompaction;
     }
 
     private List<ToolDefinition> getParentTools() {
         List<ToolDefinition> tools = new ArrayList<>(toolRegistry.getAllToolDefinitions());
         tools.add(TASK_TOOL_DEFINITION);
+        tools.add(COMPACT_TOOL_DEFINITION);
         return tools;
     }
 
@@ -75,12 +102,13 @@ public class AgentService {
         session.addMessage(new UserMessage(input));
 
         List<ToolDefinition> parentTools = getParentTools();
-        ChatRequest request = new ChatRequest(session.getMessages(), parentTools);
 
         terminal.writer().print("\n");
         terminal.flush();
 
         try {
+            contextCompaction.prepareForModelCall(session, terminal, true);
+            ChatRequest request = new ChatRequest(session.getMessages(), parentTools);
             ChatResponse response = modelClient.chat(request);
 
             while (response.hasToolCalls()) {
@@ -100,6 +128,9 @@ public class AgentService {
                         response.reasoningContent()
                 ));
 
+                boolean manualCompact = false;
+                String compactFocus = null;
+
                 for (ToolCall tc : response.toolCalls()) {
                     terminal.writer().println("[执行工具] " + tc.name() + " " + tc.arguments());
                     terminal.flush();
@@ -116,6 +147,16 @@ public class AgentService {
 
                             List<ToolDefinition> childTools = toolRegistry.getAllToolDefinitions();
                             result = subAgentService.runSubAgent(taskPrompt, desc, childTools, toolRegistry);
+                        } else if ("compact".equals(tc.name())) {
+                            manualCompact = true;
+                            Object focus = tc.arguments().get("focus");
+                            if (focus != null) {
+                                String f = focus.toString().trim();
+                                if (!f.isEmpty() && compactFocus == null) {
+                                    compactFocus = f;
+                                }
+                            }
+                            result = "Compressing...";
                         } else {
                             result = toolRegistry.executeTool(tc.name(), tc.arguments());
                         }
@@ -141,11 +182,19 @@ public class AgentService {
                     }
                 }
 
+                if (manualCompact) {
+                    terminal.writer().println("[manual compact]");
+                    terminal.flush();
+                    contextCompaction.runFullCompaction(session, compactFocus, terminal);
+                }
+                contextCompaction.prepareForModelCall(session, terminal, true);
+
                 request = new ChatRequest(session.getMessages(), parentTools);
                 response = modelClient.chat(request);
             }
 
             if (response.finishReason() != null) {
+                contextCompaction.prepareForModelCall(session, terminal, true);
                 ChatRequest finalRequest = new ChatRequest(session.getMessages(), parentTools);
 
                 StringBuilder fullContent = new StringBuilder();

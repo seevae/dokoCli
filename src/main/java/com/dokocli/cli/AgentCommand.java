@@ -165,6 +165,7 @@ public class AgentCommand implements CommandLineRunner {
                 + "- write_file: 写入文件（覆盖原内容；必要时自动创建父目录）\n"
                 + "- edit_file: 精确替换文件中第一次出现的指定文本\n"
                 + "- task: 派发子任务给子代理（子代理不继承当前对话历史，仅返回总结）\n"
+                + "- compact: 主动压缩对话（保存转录到 .transcripts/ 并用摘要替换历史，可选 focus 说明重点）\n"
                 + "- load_skill: 按名称加载专项知识/指令（遇到不熟悉的领域时优先使用）\n"
                 + "\n"
                 + "工具使用原则：\n"

@@ -32,3 +32,4 @@ application-local.yml
 *.db
 target/
 .doko/
+.transcripts/

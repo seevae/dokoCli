@@ -6,6 +6,7 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.function.Consumer;
 
 /**
  * 对话会话
@@ -38,6 +39,23 @@ public class Session {
 
     public void clearMessages() {
         messages.clear();
+        lastActive = Instant.now();
+    }
+
+    /**
+     * 原地修改消息列表（例如上下文微压缩），用于避免 {@link #getMessages()} 返回副本导致无法持久化的问题。
+     */
+    public void mutateMessages(Consumer<List<Message>> mutator) {
+        mutator.accept(messages);
+        lastActive = Instant.now();
+    }
+
+    /**
+     * 用新列表整体替换当前历史（例如全文摘要压缩后重建上下文）。
+     */
+    public void replaceMessages(List<Message> newMessages) {
+        messages.clear();
+        messages.addAll(newMessages);
         lastActive = Instant.now();
     }
 
