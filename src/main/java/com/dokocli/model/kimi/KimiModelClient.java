@@ -60,6 +60,7 @@ public class KimiModelClient implements ModelClient {
                 }
 
                 String json = response.body().string();
+                log.info("===model response json====:{}", json);
                 return parseResponse(json);
             }
         } catch (IOException e) {
