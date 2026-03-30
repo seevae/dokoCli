@@ -1,5 +1,6 @@
 package com.dokocli.core.agent;
 
+import com.dokocli.core.background.BackgroundManager;
 import com.dokocli.core.compact.ContextCompactor;
 import com.dokocli.core.session.Session;
 import com.dokocli.core.tool.ToolRegistry;
@@ -12,6 +13,7 @@ import org.springframework.stereotype.Service;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -56,13 +58,16 @@ public class AgentService {
     private final ToolRegistry toolRegistry;
     private final SubAgentService subAgentService;
     private final ContextCompactor contextCompactor;
+    private final BackgroundManager backgroundManager;
 
     public AgentService(ModelClient modelClient, ToolRegistry toolRegistry,
-                        SubAgentService subAgentService, ContextCompactor contextCompactor) {
+                        SubAgentService subAgentService, ContextCompactor contextCompactor,
+                        BackgroundManager backgroundManager) {
         this.modelClient = modelClient;
         this.toolRegistry = toolRegistry;
         this.subAgentService = subAgentService;
         this.contextCompactor = contextCompactor;
+        this.backgroundManager = backgroundManager;
     }
 
     private List<ToolDefinition> getParentTools() {
@@ -169,9 +174,13 @@ public class AgentService {
     }
 
     /**
-     * 每次 LLM 调用前执行压缩管道：Layer 1 (micro) + Layer 2/3 (auto/manual)
+     * 每次 LLM 调用前执行：
+     * 1. 排空后台任务通知队列，将已完成的结果注入对话上下文
+     * 2. 压缩管道：Layer 1 (micro) + Layer 2/3 (auto/manual)
      */
     private void compactBeforeCall(Session session, Terminal terminal, boolean manualCompact) {
+        drainBackgroundNotifications(session, terminal);
+
         contextCompactor.microCompact(session);
 
         if (manualCompact || contextCompactor.shouldAutoCompact(session)) {
@@ -180,6 +189,30 @@ public class AgentService {
             terminal.flush();
             contextCompactor.autoCompact(session);
         }
+    }
+
+    /**
+     * 排空后台任务完成通知，以 user + assistant 消息对的形式注入对话上下文。
+     * 这样 LLM 在下一轮调用时就能看到后台任务的执行结果。
+     */
+    private void drainBackgroundNotifications(Session session, Terminal terminal) {
+        List<BackgroundManager.TaskNotification> notifications = backgroundManager.drainNotifications();
+        if (notifications.isEmpty()) {
+            return;
+        }
+        String notifText = notifications.stream()
+                .map(n -> "[bg:" + n.taskId() + "] " + n.status() + ": " + n.result())
+                .collect(Collectors.joining("\n"));
+
+        terminal.writer().println("[后台任务完成通知]");
+        for (BackgroundManager.TaskNotification n : notifications) {
+            terminal.writer().println("  任务 " + n.taskId() + " [" + n.status() + "]: " + n.command());
+        }
+        terminal.writer().println();
+        terminal.flush();
+
+        session.addMessage(new UserMessage("<background-results>\n" + notifText + "\n</background-results>"));
+        session.addMessage(new AssistantMessage("已收到后台任务完成通知。", null, null));
     }
 
     private void printReasoning(ChatResponse response, Terminal terminal) {
